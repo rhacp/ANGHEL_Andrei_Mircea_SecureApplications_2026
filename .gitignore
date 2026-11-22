@@ -36,3 +36,8 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Certificates and Keystores ###
+*.cer
+*.pem
+*.ks
