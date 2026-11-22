@@ -1,23 +1,22 @@
 package Lab22_11_2026;
 
 import Lab14_11_2026.TestBitwise;
-import Lab21_11_20267.TestAESGCM;
 
 import javax.crypto.*;
-import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.OAEPParameterSpec;
 import javax.crypto.spec.PSource;
-import javax.crypto.spec.SecretKeySpec;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.*;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.security.spec.MGF1ParameterSpec;
 import java.util.Enumeration;
-import java.util.Scanner;
 
 public class TestPublicPrivate {
 
@@ -63,12 +62,29 @@ public class TestPublicPrivate {
             throw new RuntimeException(e);
         }
 
-        keyGenerator.init(512);
+        // Not working because of Oracle
+//        keyGenerator.init(512);
+        keyGenerator.init(256);
         byte[] aesKey = keyGenerator.generateKey().getEncoded();
+        System.out.println("AES Key: " + TestBitwise.getHexString(aesKey));
 
         // encrypt AES key with destination public key
-        byte[] encryptedAESKey = encryptRSA(aesKey, getCertificateKey(certificateFile), Mode.ENC);
-        System.out.println("EncryptedAESKey: " + new String(encryptedAESKey));
+        var publicKey = getPublicKey(ks, ALIAS);
+        var privateKey = getPrivateKey(ks, ALIAS, STORE_PASSWORD);
+        byte[] encryptedAESKey = processRSA(aesKey, publicKey, Mode.ENC);
+        byte[] decryptedAESKey = processRSA(encryptedAESKey, privateKey, Mode.DEC);
+        System.out.println("EncryptedAESKey: " + TestBitwise.getHexString(encryptedAESKey));
+        System.out.println("DecryptedAESKey: " + TestBitwise.getHexString(decryptedAESKey));
+
+        System.out.println("\n-------------------------------------\n");
+
+        // test digital signature
+        byte[] signature = signFile("message.txt", privateKey);
+        System.out.println("Signature: " + TestBitwise.getHexString(signature));
+
+        // the destinatio will decrypt with its own key
+        System.out.println(checkFileSignature("message.txt", publicKey, signature));
+        System.out.println(checkFileSignature("message2.txt", publicKey, signature));
     }
 
     private static KeyStore loadKeyStore(String filename, String password) {
@@ -155,14 +171,60 @@ public class TestPublicPrivate {
         }
     }
 
-    private static byte[] encryptRSA(byte[] data, Key key, Mode mode) {
+    private static byte[] processRSA(byte[] data, Key key, Mode mode) {
         try {
             Cipher cipher = Cipher.getInstance(ALGORITHM);
-            cipher.init(Cipher.ENCRYPT_MODE, key, new OAEPParameterSpec("SHA-256", "MGD1", MGF1ParameterSpec.SHA3_256, PSource.PSpecified.DEFAULT));
             initCipher(mode, cipher, key);
             return cipher.doFinal(data);
-        } catch (NoSuchAlgorithmException | NoSuchPaddingException | InvalidKeyException |
-                 InvalidAlgorithmParameterException | IllegalBlockSizeException | BadPaddingException e) {
+        } catch (NoSuchAlgorithmException | NoSuchPaddingException |
+                 IllegalBlockSizeException | BadPaddingException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static byte[] signFile(String fileName, PrivateKey key) {
+        Path filePath = Paths.get(fileName);
+        if (!Files.exists(filePath)) {
+            throw new IllegalArgumentException("File does not exist");
+        }
+
+        try {
+            var content = Files.readAllBytes(filePath);
+            Signature signature = Signature.getInstance("SHA256withRSA");
+            initSignature(SignMode.SIGN, signature, key);
+            signature.update(content);
+            return signature.sign();
+
+        } catch (IOException | NoSuchAlgorithmException | SignatureException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static boolean checkFileSignature(String fileName, PublicKey key, byte[] signatureBytes) {
+        Path filePath = Paths.get(fileName);
+        if (!Files.exists(filePath)) {
+            throw new IllegalArgumentException("File does not exist");
+        }
+
+        try {
+            var content = Files.readAllBytes(filePath);
+            Signature signature = Signature.getInstance("SHA256withRSA");
+            initSignature(SignMode.CHECK, signature, key);
+            signature.update(content);
+            return signature.verify(signatureBytes);
+
+        } catch (IOException | NoSuchAlgorithmException | SignatureException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void initSignature(SignMode mode, Signature signature, Key key) {
+        try {
+            switch (mode) {
+                case SignMode.SIGN -> signature.initSign((PrivateKey) key);
+                case SignMode.CHECK -> signature.initVerify((PublicKey) key);
+            }
+        } catch (InvalidKeyException e) {
             throw new RuntimeException(e);
         }
     }
@@ -183,5 +245,10 @@ public class TestPublicPrivate {
     private enum Mode {
         ENC,
         DEC
+    }
+
+    private enum SignMode {
+        SIGN,
+        CHECK
     }
 }
